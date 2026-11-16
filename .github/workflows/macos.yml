@@ -1,0 +1,85 @@
+name: macos-build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: 真机 macOS 构建
+    runs-on: macos-14
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 打印真实 Mac 环境
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+          swift --version
+
+      - name: Swift 包 · 构建
+        working-directory: swift
+        run: swift build -c release
+
+      - name: Swift 包 · 测试
+        working-directory: swift
+        run: swift test
+
+      - name: 环境自检
+        working-directory: swift
+        run: .build/release/macdev doctor
+
+      - name: 安装 XcodeGen
+        run: brew install xcodegen
+
+      - name: 生成 Xcode 工程
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: 构建 iOS App（模拟器，免签名）
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -project AuroraDemo.xcodeproj \
+            -scheme AuroraDemo \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$GITHUB_WORKSPACE/build" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: 构建 macOS App
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -project AuroraDemo.xcodeproj \
+            -scheme AuroraMac \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$GITHUB_WORKSPACE/build" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: 打包产物
+        run: |
+          mkdir -p dist
+          cp swift/.build/release/macdev dist/
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$GITHUB_WORKSPACE/build/Build/Products/Debug-iphonesimulator/AuroraDemo.app" \
+            "dist/AuroraDemo-ios-sim.zip"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$GITHUB_WORKSPACE/build/Build/Products/Release/AuroraMac.app" \
+            "dist/AuroraMac.zip"
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora-macos-build
+          path: dist/
+          if-no-files-found: error
